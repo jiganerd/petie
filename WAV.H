@@ -1,0 +1,122 @@
+/*
+a Herwin production '98
+version 2.0
+
+by Herwin harSens van Welbergen 
+chloorrubberharsens@yahoo.com
+http://home.student.utwente.nl/h.vanwelbergen/
+*/
+#ifndef WAV_H
+#define WAV_H
+#include <fstream.h>
+#include <string.h>
+#include <values.h>
+#include "c:\forest\sb.h"
+
+class wave_header
+{  public:
+	char 	rID[4];
+	long  rLen;
+	char 	wID[4];
+
+	//format chunk
+	char	fID[4];
+	long	fLen;
+	int		wFormtTag;
+	int		nChannels;
+	long	nSamplesPerSec;
+	long	nAvgBytesPerSec;
+	int		nBlockAlign;
+	int		FormatSpecific;
+
+	//data chunk
+	char 	dID[4];
+	long	dLen;
+	//here starts the data
+};
+
+int times=0;
+ifstream f;
+wave_header head;
+void *wav_buffer;
+int mode;
+unsigned hsize;
+//--------------------------------------------------------------------------
+int play_wave(const char *file_name,sb blaster)
+{  wav_buffer=blaster.buffer;
+	f.open(file_name,ios::in|ios::binary);
+
+	//file does not exists!!!!
+	if (!f) return 0;
+
+	//read header part
+	f.read((char*)&head,sizeof(head));
+
+	//check file length
+	if (f.gcount()!=sizeof(head)) return 0; //file too short;
+
+	//check internals
+	char i[5];
+	i[4]='\0';
+
+	//quadruple check
+	strncpy(i,head.rID,4);
+	if(strcmp(i,"RIFF")!=0)return 0;
+	strncpy(i,head.wID,4);
+	if(strcmp(i,"WAVE")!=0)return 0;
+	strncpy(i,head.fID,4);
+	if(strcmp(i,"fmt ")!=0)return 0;
+	strncpy(i,head.dID,4);
+	if(strcmp(i,"data")!=0)return 0;
+
+	//maak sound pointer
+	hsize=blaster.buffer_size/2;
+	unsigned size;
+	if (head.dLen>blaster.buffer_size)
+	{  f.read((char*)wav_buffer,hsize);
+		f.read((char*)wav_buffer+hsize,hsize);
+		head.dLen-=blaster.buffer_size;
+		mode=sb_auto_init;
+	}
+	else
+	{	if(head.dLen<hsize)
+		{   f.read((char*)wav_buffer,int(head.dLen));
+		}
+		else
+		{	f.read((char*)wav_buffer,hsize);
+			f.read((char*)wav_buffer+hsize,int(head.dLen-hsize));
+		}
+		f.close();
+		mode=sb_single_cycle;
+		size=head.dLen;
+	}
+	if (mode==sb_single_cycle)
+		blaster.ss_playback(wav_buffer,size,head.nSamplesPerSec,head.nChannels);
+	if(mode==sb_auto_init)
+		blaster.ai_playback(wav_buffer,head.nSamplesPerSec,head.nChannels);
+	return 1;
+}
+//-------------------------------------------------------------------------
+int wav_handler(sb blaster)
+{   if (mode==sb_single_cycle)
+	{	return 1;
+	}
+	times++;
+	if (head.dLen>hsize)
+	{   f.read((char*)wav_buffer+hsize*(times%2),hsize);
+		head.dLen-=hsize;
+	}
+	else
+	{   f.read((char*)wav_buffer+hsize*(times%2),int(head.dLen));
+		f.close();
+		if ((blaster.version_nr<sb16)&&(head.nChannels*head.nSamplesPerSec>23000))
+		{	blaster.reset_DSP();
+		}
+		blaster.ss_playback(wav_buffer,head.dLen,head.nSamplesPerSec,head.nChannels);
+		mode=sb_single_cycle;
+	}
+	return 0;
+}
+#endif
+
+

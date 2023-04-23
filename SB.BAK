@@ -1,0 +1,461 @@
+/*
+a Herwin production '98
+version 2.02
+
+by Herwin harSens van Welbergen
+chloorrubberharsens@yahoo.com
+http://home.student.utwente.nl/h.vanwelbergen/
+*/
+#ifndef soundblaster
+#define soundblaster
+#include "c:\windows\desktop\sound\dma.h"
+#include "c:\windows\desktop\sound\pic.h"
+#include <values.h>
+typedef unsigned char byte;
+//--------------------------------------------------------------------------
+//types:
+enum blaster_type{sb1=1,sb2=2,sbpro=3,sb16=4};
+enum sb16modes{fifo_off=0,fifo_on=2,sb_single_cycle=0,sb_auto_init=4,DA=0,AD=8};
+enum sb16_input_types{off=0,mic=1,right_cd=2,left_cd=4,right_linein=8,left_linein=16,right_fm=32,left_fm=64};
+enum sbpro_input_types{mic1=0,cd=2,mic2=4,linein=6};
+
+//global variables and functions
+int test_interrupt=0;
+//---------------------------------------------------------------------------
+class sb
+{	public:
+		//variables
+		DMA dma;
+		int port;
+		int dma_channel;
+		int irq;
+		blaster_type version_nr;
+		byte *buffer;
+		unsigned buffer_size;
+
+		//functions
+		sb();
+		~sb();
+		void mixer_reset();
+		byte get_mixer_status();
+		void halt_8bitDMA();
+		void continue_8bitDMA();
+		void set(blaster_type type,int port1,int dma1,int irq1,void interrupt far (*handler)(...));
+		void set(void interrupt far(*handler)(...));
+		void reset();
+		void halt();
+		int detect();
+		int reset_DSP();
+		int get_versionnr();
+		int get_speaker_status();
+		void enable_speakers();
+		void disable_speakers();
+		void ack_interrupt();
+		void ss_playback(void *buffer,unsigned size,unsigned freq=11025,int chan=1);
+		int ai_playback(void *buffer,unsigned freq=11025,int chan=1);
+		void setup_playback(unsigned size);
+		int setup_ai_playback(unsigned size,unsigned freq);
+		void record(void *buffer,unsigned size=65535,unsigned freq=11025,int chan=1);
+		void setup_record(unsigned size);
+		void record_next();
+		void set_sample_rate(unsigned sample_rate);
+		void silence_dac(unsigned size=2,unsigned freq=11025);
+		void stop_autoinit();
+		int set_right_input(byte value);
+		int set_left_input(byte value);
+		int set_input(byte value);
+		int set_mic_level(byte value);
+		int enable_AGC();
+		int disable_AGC();
+	private:
+		//variables
+		int channels;
+		int serviced;
+		PIC pic;
+		void interrupt (*handler)(...);
+		//functions
+		void sbpro_set_mic_level(byte value);
+		void sb16_set_mic_level(byte value);
+		void write_DSP(byte value);
+		byte read_DSP();
+		void write_mixer(byte index,byte value);
+		byte read_mixer(byte index);
+		void sb16_set_sample_rate(unsigned sample_rate);
+		void sb_set_sample_rate(unsigned sample_rate);
+		void sbpro_set_sample_rate(unsigned sample_rate);
+		void irq_request();
+		void sb16_8bit_playback();
+		void sb16_8bit_record();
+		void sb16_8bit_aiplayback();
+};
+//---------------------------------------------------------------------------
+sb::sb()
+{   buffer_size=48000;
+    (void*)buffer=dma.make_buffer(buffer_size);
+//	buffer_size=64000;
+//	(void*)buffer=MK_FP(0x9000,0);
+}
+//--------------------------------------------------------------------------
+sb::~sb()
+{	delete[]dma.bufp;
+}
+//--------------------------------------------------------------------------
+void sb::set(void interrupt far(*hand)(...))
+{	handler=hand;
+	channels=1;
+}
+//---------------------------------------------------------------------------
+void sb::reset()
+{ 	pic.reset();
+}
+//-------------------------------------------------------------------------
+void sb::set(blaster_type blaster,int port1,int dma1,int irq1,void interrupt far (*hand)(...))
+{	port		   =port1;
+	dma_channel	=dma1;
+	irq		   =irq1;
+	version_nr	=blaster;
+	set(hand);
+	pic.set(irq,handler);
+}
+//---------------------------------------------------------------------------
+int sb::detect()
+{   //detect port
+	port=0;
+	for(int port1=0x210;port1<=0x280;port1+=0x10)
+	{  port=port1;
+		if(reset_DSP())
+		{	break;
+		}
+		port=0;
+	}
+	if (port==0) return 0;
+
+	//get version nr
+	version_nr=blaster_type(get_versionnr()/100);
+	channels=1;
+
+	//detect irq
+	irq=0;
+	serviced=0;
+	for(int n=2;n<15;n++)
+	{   if(n==3)continue;
+		if(n==4)continue;
+		pic.set(n,handler);
+		irq_request();	//force interrupt
+		delay(1);		//delay for a while to let the interrupt work out
+		if (serviced==1)
+		{   //try again to make sure it is no accidental interrupt
+			serviced=0;
+			irq_request();
+			delay(1);
+			if(serviced==1)
+			{	serviced=0;
+				irq=n;
+				break;
+			}
+		}
+		pic.reset();
+	}
+	if(irq==0) return 0;
+
+	//detect dma
+	dma_channel=20;
+	for(n=0;n<3;n++)
+	{  dma_channel=n;
+		serviced=0;
+		ss_playback(buffer,2);
+		delay(5);//delay a while to playback 2 bytes
+		if(serviced==1)
+		{  serviced=0;
+			ss_playback(buffer,2);
+			delay(5);
+			if (serviced==1)
+			{	serviced=0;
+				break;
+			}
+			else dma_channel=20;
+		}
+		else dma_channel=20;
+	}
+	if(dma_channel==20)
+	{   pic.reset();
+		return 0;
+	}
+	return 1;
+}
+//---------------------------------------------------------------------------
+void sb::sb16_8bit_playback()
+{	write_DSP(0xc0);
+	write_DSP((channels/2)<<5);
+}
+//---------------------------------------------------------------------------
+void sb::sb16_8bit_aiplayback()
+{	write_DSP(0xc6);
+	write_DSP((channels/2)<<5);
+}
+//---------------------------------------------------------------------------
+void sb::sb16_8bit_record()
+{	write_DSP(0xc8);
+	write_DSP((channels/2)<<5);
+}
+//--------------------------------------------------------------------------
+void sb::write_mixer(byte index,byte value)
+{	outp(port+4,index);
+	outp(port+5,value);
+}
+//---------------------------------------------------------------------------
+byte sb::read_mixer(byte index)
+{	outp(port+4,index);
+	return inp(port+5);
+}
+//---------------------------------------------------------------------------
+void sb::mixer_reset()
+{   write_mixer(0,0);
+}
+//---------------------------------------------------------------------------
+byte sb::get_mixer_status()
+{	return read_mixer(1);
+}
+//---------------------------------------------------------------------------
+void sb::sbpro_set_mic_level(byte value) //sbpro
+{	write_mixer(0xa,value);
+}
+//---------------------------------------------------------------------------
+void sb::sb16_set_mic_level(byte value)//sb16
+{   value&=248;
+	write_mixer(0x3a,value);
+}
+//--------------------------------------------------------------------------
+int sb::set_mic_level(byte value)
+{	switch (version_nr)
+	{	case sb1	://return 0;
+		case sbpro	:
+		case sb2	:sbpro_set_mic_level(value);break;
+		case sb16	:sb16_set_mic_level(value);break;
+	}
+	return 1;
+}
+//--------------------------------------------------------------------------
+int sb::set_left_input(byte value)//sb16+ only
+{	if (version_nr<sb16)return 0;
+	write_mixer(0x3d,value);
+	return 1;
+}
+//--------------------------------------------------------------------------
+int sb::set_right_input(byte value)//sb16+ only
+{	if(version_nr<sb16)return 0;
+	write_mixer(0x3e,value);
+	return 1;
+}
+//--------------------------------------------------------------------------
+int sb::set_input(byte value)//sbpro only
+{   if((version_nr<sb16)&&(version_nr>sb1))
+	write_mixer(0x0c,value|1);
+	return 1;
+}
+//--------------------------------------------------------------------------
+int sb::enable_AGC()
+{   if(version_nr<sb16) return 0;
+	write_mixer(0x43,1);
+	return 1;
+}
+//--------------------------------------------------------------------------
+int sb::disable_AGC()
+{	if(version_nr<sb16) return 0;
+	write_mixer(0x43,0);
+	return 1;
+}
+//--------------------------------------------------------------------------
+void sb::record(void *buf,unsigned size,unsigned freq,int chan)
+{	disable_speakers();
+	size--;
+	dma.start(dma_channel,buf,size,write___+signal_mode);
+	set_sample_rate(freq);
+	channels=chan;
+	setup_record(size);
+}
+//---------------------------------------------------------------------------
+void sb::setup_record(unsigned size)
+{	switch (version_nr)
+	{	case sb1	:
+		case sb2	:
+		case sbpro	:write_DSP(0x24);break;
+		case sb16	:sb16_8bit_record();break;
+		default		:write_DSP(0x24);break;
+	}
+	write_DSP(LO(size));
+	write_DSP(HI(size));
+}
+//----------------------------------------------------------------------
+void sb::ss_playback(void *buf,unsigned size,unsigned freq,int chan)
+{  //playback single_cycle, 8 bit, sound
+	disable_speakers();
+	channels=chan;
+	size--;
+	dma.start(dma_channel,buf,size,read___+signal_mode);
+	set_sample_rate(freq);
+	enable_speakers();
+	setup_playback(size);
+}
+//--------------------------------------------------------------------------
+void sb::setup_playback(unsigned size)
+{  	switch (version_nr)
+	{	case sb1	:
+		case sb2	:
+		case sbpro	:{	write_mixer(0xe,17|(channels/2)<<2);
+						write_DSP(0x14);
+					 }
+					 break;
+		case sb16	:sb16_8bit_playback();break;
+		default		:write_DSP(0x14);break;
+	}
+	write_DSP(LO(size));
+	write_DSP(HI(size));
+}
+//------------------------------------------------------------------------
+int sb::ai_playback(void *buf,unsigned freq,int chan)
+{ 	//if size is not dividable by 2, decrease size
+	if (buffer_size%2)buffer_size--;
+	channels=chan;
+	dma.start(dma_channel,buf,buffer_size-1,read___+signal_mode+auto_init);
+	channels=chan;
+	set_sample_rate(freq);
+	channels=chan;
+	enable_speakers();
+	if (!setup_ai_playback(buffer_size,freq)) return 0;
+	return 1;
+}
+//--------------------------------------------------------------------------
+int sb::setup_ai_playback(unsigned size,unsigned freq)
+{   if (version_nr<sb16)
+		{	if( long(freq)*channels>45454)
+			return 0;		//can't play >22kHz stereo or 44kHz mono on <sbpro
+		}
+	switch (version_nr)
+	{	case sb1	:return 0;//can't play auto init on soundblaster 1.0
+		case sb2	:
+		case sbpro	:write_DSP(0x48);break;
+		case sb16	:sb16_8bit_aiplayback();break;
+		default		:write_DSP(0x48);break;
+	}
+	write_DSP(LO((size/2)-1));
+	write_DSP(HI((size/2)-1));
+	if(version_nr<sb16)
+	{  write_mixer(0xe,17|(channels/2)<<1);
+		if (freq*channels<23000) write_DSP(0x1c);
+		else write_DSP(0x90);
+	}
+	return 1;
+}
+//------------------------------------------------------------------------
+void sb::stop_autoinit()
+{	write_DSP(0xDA);
+}
+//--------------------------------------------------------------------------
+void sb::halt_8bitDMA()
+{	write_DSP(0xd0);
+}
+//--------------------------------------------------------------------------
+void sb::continue_8bitDMA()
+{	//continue halted dma operation
+	write_DSP(0xd4);
+}
+//--------------------------------------------------------------------------
+void halt()
+{
+}
+//--------------------------------------------------------------------------
+void cont()
+{
+}
+//--------------------------------------------------------------------------
+void sb::ack_interrupt()
+{  serviced=1;
+	inp(port+0xe);
+	pic.write_EOI();
+}
+//--------------------------------------------------------------------------
+byte sb::read_DSP()
+{   while(inp(port+0xe)&128!=128);
+	 return inp(port+0xa);
+}
+//---------------------------------------------------------------------------
+void sb::write_DSP(byte value)
+{	while((inp(port+0xc)&128)!=0);
+	outp(port+0xc,value);
+}
+//-------------------------------------------------------------------------
+int sb::reset_DSP()
+{	outp(port+0x6,1);
+	delay(5);
+	outp(port+0x6,0);
+	long n=0;
+	while(inp(port+0xe)&128!=128)
+	{	n++;
+		if(n>1000000000)return 0;
+	}
+	if(inp(port+0xa)!=0xaa) return 0;
+	return 1;
+}
+//-------------------------------------------------------------------------
+int sb::get_versionnr()
+{	write_DSP(0xe1);
+	return read_DSP()*100+read_DSP();
+}
+//-------------------------------------------------------------------------
+int sb::get_speaker_status()
+{	write_DSP(0xd8);
+	return read_DSP();
+}
+//-------------------------------------------------------------------------
+void sb::enable_speakers()
+{	write_DSP(0xd1);
+}
+//-------------------------------------------------------------------------
+void sb::disable_speakers()
+{	write_DSP(0xd3);
+}
+//-------------------------------------------------------------------------
+void sb::set_sample_rate(unsigned rate)
+{   switch (version_nr)
+	{  case 1:								            //sb1.0
+		case 2:sb_set_sample_rate(rate);break;	   //sb2.0
+		case 3:sbpro_set_sample_rate(rate);break; //sb pro
+		case 4:sb16_set_sample_rate(rate);break;  //sb16
+		default:sb_set_sample_rate(rate);break;   //other
+	}
+}
+//------------------------------------------------------------------------
+void sb::sb16_set_sample_rate(unsigned rate)//sb16 only!!!!!!!
+{	write_DSP(0x41);
+	write_DSP(HI(rate));
+	write_DSP(LO(rate));
+}
+//-------------------------------------------------------------------------
+void sb::sb_set_sample_rate(unsigned rate)//all soundblasters
+{   long timeconst=256-(1000000L/rate);
+	write_DSP(0x40);
+	write_DSP(timeconst);
+}
+//-------------------------------------------------------------------------
+void sb::sbpro_set_sample_rate(unsigned rate)//sbpro only!!
+{   long timeconst=256-(1000000L/(rate*channels));
+	write_DSP(0x40);
+	write_DSP(timeconst);
+}
+//-------------------------------------------------------------------------
+void sb::silence_dac(unsigned size,unsigned freq)
+{	//used to test the irq nr by sending silence (I think)
+	//much easier is to use irq_request()
+	size--;
+	sb_set_sample_rate(freq);
+	write_DSP(0x80);
+	write_DSP(LO(size));
+	write_DSP(HI(size));
+}
+//-------------------------------------------------------------------------
+void sb::irq_request()
+{	write_DSP(0xf2);
+}
+//-------------------------------------------------------------------------
+#endif

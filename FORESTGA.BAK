@@ -1,0 +1,512 @@
+//BUGS:
+//NONE - YEEHAH!!!!!
+
+//WORKING ON:
+
+//TO DO:
+//SOUND!!!!
+//
+
+
+//INCLUDES////////////////////////////////////////////////////////////////////
+#include <stdio.h>
+#include <conio.h>
+#include <mgdouble.h>
+#include <key.h>
+#include <mem.h>
+#include <string.h>
+#include <iostream.h>
+//sound shit
+#include "c:\forest\sb.h"
+#include "c:\forest\wav.h"
+//DEFINES/////////////////////////////////////////////////////////////////////
+#define MAP_WIDTH			80
+#define MAP_HEIGHT		40
+#define MAX_TILES		   47
+
+#define MAX_PEZ			10
+
+#define SOFT_TILE 0
+#define HARD_TILE 1
+//GLOBALS/////////////////////////////////////////////////////////////////////
+int done = 0;
+
+bin_picture frames, tilegfx, font;
+sprite /*for_head, for_torso, */for_legs,
+		 pez[MAX_PEZ];
+
+int facing = 0;//0 - facing right
+					//4 - facing left
+int ctrl_held = 0;
+
+//key variables
+int key_table[7] = {0, 0, 0, 0, 0, 0, 0}; //keeps track of what keys are up
+													//or down
+int volatile KeyScan;			// modified by keyboard interrupt handler
+void interrupt (*OldInt9)(__CPPARGS);	//ptr to BIOS keyboard handler
+//end
+
+//map variables
+char far* tiles[MAX_TILES];  //the bitmapped data for the tiled graphics
+unsigned char map[MAP_WIDTH][MAP_HEIGHT][2]; //table for the level
+int bg_seam_x = 0;	//the num. of tiles from the left of the level
+					//that the screen is currently on
+int bg_seam_y = 0; //the num. of tiles from the top of the level
+					//that the screen is currently on
+float ox = 0;  //the number of pixels that the current screen position is
+					//offset from the right of the current tile
+float oy = 0;  //the number of pixels that the current screen position is
+					//offset from the bottom of the current tile
+int curr_tile_x, curr_tile_y, curr_hard_tile_y;
+//end
+
+//more sound shit
+sb blaster;
+int check;
+///////////////////////////////////////////////////////////////////////////
+void interrupt far handler(...)
+{
+check = wav_handler(blaster);
+blaster.ack_interrupt();
+}
+///////////////////////////////////////////////////////////////////////////
+void interrupt NewInt9(__CPPARGS)
+{
+register char x;
+
+KeyScan=inp(0x60);       // read key code from keyboard
+x=inp(0x61);             // tell keyboard that key was processed
+outp(0x61,(x|0x80));
+outp(0x61,x);
+outp(0x20,0x20);         // send End-Of-Interrupt
+switch(KeyScan)
+	{
+	case (UP_ARROW_PRESSED): 	 key_table[0] = 1;
+										 break;
+	case (DOWN_ARROW_PRESSED):  key_table[1] = 1;
+										 break;
+	case (LEFT_ARROW_PRESSED):  key_table[2] = 1;
+										 break;
+	case (RIGHT_ARROW_PRESSED): key_table[3] = 1;
+										 break;
+	case (UP_ARROW_REL): 		 key_table[0] = 0;
+										 break;
+	case (DOWN_ARROW_REL): 		 key_table[1] = 0;
+										 break;
+	case (LEFT_ARROW_REL):		 key_table[2] = 0;
+										 break;
+	case (RIGHT_ARROW_REL):		 key_table[3] = 0;
+										 break;
+	case (CTRL_PRESSED): 		 key_table[4] = 1;
+										 break;
+	case (CTRL_REL): 				 key_table[4] = 0;
+										 ctrl_held = 0;
+										 break;
+	case (ALT_PRESSED):	 		 key_table[5] = 1;
+										 break;
+	case (ALT_REL): 				 key_table[5] = 0;
+										 break;
+	case (P_PRESSED):  			 if (key_table[6] == 1) key_table[6] = 0;
+										 else key_table[6] = 1;
+										 break;
+	case (Q_PRESSED):  			 done = 1;
+										 break;
+	}//end switch
+}
+///////////////////////////////////////////////////////////////////////////
+void RestoreKeyboard(void)
+{
+_dos_setvect(KEYBOARD,OldInt9);   // restore BIOS keyboard interrupt
+}
+///////////////////////////////////////////////////////////////////////////
+void InitKeyboard(void)
+{
+OldInt9 = _dos_getvect(KEYBOARD);   // save BIOS keyboard interrupt
+_dos_setvect(KEYBOARD,NewInt9);   // install new int 9h handler
+}
+//////////////////////////////////////////////////////////////////////////////
+void Shoot_Pez()
+{
+//this function finds an available pez sprite out of the array and
+//starts it off at Petie's current position
+
+int index, work_pez_1 = -1;
+
+for (index = 0; index < MAX_PEZ; index++)
+	{
+	if (pez[index].state == DEAD) work_pez_1 = index;
+	}
+
+if (work_pez_1 == -1) return;
+pez[work_pez_1].world_x = for_legs.world_x + 20;
+pez[work_pez_1].world_y = for_legs.world_y + 18;
+pez[work_pez_1].state = ALIVE;
+
+if (for_legs.curr_frame < 4)
+	{
+	pez[work_pez_1].x_vel = 8;
+	pez[work_pez_1].y_vel = 0;
+	}
+//if (for_head.curr_frame == 1)
+//	{
+//	pez[work_pez_1].x_vel = 6;
+//	pez[work_pez_1].y_vel = -6;
+//	}
+//if (for_head.curr_frame == 2 || for_head.curr_frame == 6)
+//	{
+//	pez[work_pez_1].x_vel = 0;
+//	pez[work_pez_1].y_vel = -8;
+//	}
+//if (for_head.curr_frame == 3)
+//	{
+//	pez[work_pez_1].x_vel = 8;
+//	pez[work_pez_1].y_vel = 6;
+//	}
+if (for_legs.curr_frame > 3)
+	{
+	pez[work_pez_1].x_vel = -8;
+	pez[work_pez_1].y_vel = 0;
+	}
+//if (for_head.curr_frame == 5)
+//	{
+//	pez[work_pez_1].x_vel = -8;
+//	pez[work_pez_1].y_vel = -6;
+//	}                     w
+//if (for_head.curr_frame == 7)
+//	{
+//	pez[work_pez_1].x_vel = -8;
+//	pez[work_pez_1].y_vel = 6;
+//	}
+}//end Shoot_Pez()
+//////////////////////////////////////////////////////////////////////////////
+void main()
+{
+int i = 0;
+int x, y;
+Set_Video_Mode(VGA256);
+Init_DB();
+InitKeyboard();
+
+//init the siggetysound yo
+blaster.set(sb16,0x220,1,5,handler);
+blaster.reset_DSP();
+check = 0;
+
+//set up sprite variables
+InitSprite(&for_legs, 40, 60);
+for_legs.world_x = 160;
+for_legs.world_y = 100;
+for_legs.anim_speed = 7;
+
+//InitSprite(&for_torso, 40, 10);
+//InitSprite(&for_head, 40, 25);
+
+for (i = 0; i < MAX_PEZ; i++)
+	InitSprite(&pez[i], 4, 2);
+
+//load in font
+Bin_Init(&font);
+Load_Bin("font.bin", &font, 0);
+
+//load graphics into sprites
+Bin_Init(&frames);
+Load_Bin("guy.bin", &frames, 1);
+//top row
+Grab(&frames, &for_legs, 0, 0, 0);
+Grab(&frames, &for_legs, 1, 40, 0);
+Grab(&frames, &for_legs, 2, 80, 0);
+Grab(&frames, &for_legs, 3, 120, 0);
+Grab(&frames, &for_legs, 4, 160, 0);
+Grab(&frames, &for_legs, 5, 200, 0);
+Grab(&frames, &for_legs, 6, 240, 0);
+Grab(&frames, &for_legs, 7, 280, 0);
+//2nd row
+Grab(&frames, &for_legs, 8, 0, 60);
+Grab(&frames, &for_legs, 9, 40, 60);
+Grab(&frames, &for_legs, 10, 80, 60);
+Grab(&frames, &for_legs, 11, 120, 60);
+Grab(&frames, &for_legs, 12, 160, 60);
+Grab(&frames, &for_legs, 13, 200, 60);
+Grab(&frames, &for_legs, 14, 240, 60);
+Grab(&frames, &for_legs, 15, 280, 60);
+//3nd row
+Grab(&frames, &for_legs, 16, 0, 120);
+Grab(&frames, &for_legs, 17, 40, 120);
+Grab(&frames, &for_legs, 18, 80, 120);
+Grab(&frames, &for_legs, 19, 120, 120);
+Grab(&frames, &for_legs, 20, 160, 120);
+Grab(&frames, &for_legs, 21, 200, 120);
+Grab(&frames, &for_legs, 22, 240, 120);
+
+
+Grab(&frames, &pez[0], 0, 0, 120);
+Bin_Delete(&frames);
+
+for (i = 0; i < MAX_TILES; i++)
+	tiles[i] = (char far*)farmalloc(TILE_WIDTH*TILE_HEIGHT);
+
+Bin_Init(&tilegfx);
+Load_Bin("tiles.bin", &tilegfx, 1);
+//first line
+Grab_Tile(&tilegfx, tiles[0], 0, 0);
+Grab_Tile(&tilegfx, tiles[1], 20, 0);
+Grab_Tile(&tilegfx, tiles[2], 40, 0);
+Grab_Tile(&tilegfx, tiles[3], 60, 0);
+Grab_Tile(&tilegfx, tiles[4], 80, 0);
+Grab_Tile(&tilegfx, tiles[5], 100, 0);
+Grab_Tile(&tilegfx, tiles[6], 120, 0);
+Grab_Tile(&tilegfx, tiles[7], 140, 0);
+//second line
+Grab_Tile(&tilegfx, tiles[8], 0, 20);
+Grab_Tile(&tilegfx, tiles[9], 20, 20);
+Grab_Tile(&tilegfx, tiles[10], 40, 20);
+Grab_Tile(&tilegfx, tiles[11], 60, 20);
+Grab_Tile(&tilegfx, tiles[12], 80, 20);
+Grab_Tile(&tilegfx, tiles[13], 100, 20);
+Grab_Tile(&tilegfx, tiles[14], 120, 20);
+Grab_Tile(&tilegfx, tiles[15], 140, 20);
+//third line
+Grab_Tile(&tilegfx, tiles[16], 0, 40);
+Grab_Tile(&tilegfx, tiles[17], 20, 40);
+Grab_Tile(&tilegfx, tiles[18], 40, 40);
+Grab_Tile(&tilegfx, tiles[19], 60, 40);
+Grab_Tile(&tilegfx, tiles[20], 80, 40);
+Grab_Tile(&tilegfx, tiles[21], 100, 40);
+Grab_Tile(&tilegfx, tiles[22], 120, 40);
+Grab_Tile(&tilegfx, tiles[23], 140, 40);
+//fourth line
+Grab_Tile(&tilegfx, tiles[24], 0, 60);
+Grab_Tile(&tilegfx, tiles[25], 20, 60);
+Grab_Tile(&tilegfx, tiles[26], 40, 60);
+Grab_Tile(&tilegfx, tiles[27], 60, 60);
+Grab_Tile(&tilegfx, tiles[28], 80, 60);
+Grab_Tile(&tilegfx, tiles[29], 100, 60);
+Grab_Tile(&tilegfx, tiles[30], 120, 60);
+Grab_Tile(&tilegfx, tiles[31], 140, 60);
+//fifth line
+Grab_Tile(&tilegfx, tiles[32], 0, 80);
+Grab_Tile(&tilegfx, tiles[33], 20, 80);
+Grab_Tile(&tilegfx, tiles[34], 40, 80);
+Grab_Tile(&tilegfx, tiles[35], 60, 80);
+Grab_Tile(&tilegfx, tiles[36], 80, 80);
+Grab_Tile(&tilegfx, tiles[37], 100, 80);
+Grab_Tile(&tilegfx, tiles[38], 120, 80);
+Grab_Tile(&tilegfx, tiles[39], 140, 80);
+//sixth line
+Grab_Tile(&tilegfx, tiles[40], 0, 100);
+Grab_Tile(&tilegfx, tiles[41], 20, 100);
+Grab_Tile(&tilegfx, tiles[42], 40, 100);
+Grab_Tile(&tilegfx, tiles[43], 60, 100);
+Grab_Tile(&tilegfx, tiles[44], 80, 100);
+Grab_Tile(&tilegfx, tiles[45], 100, 100);
+Grab_Tile(&tilegfx, tiles[46], 120, 100);
+Bin_Delete(&tilegfx);
+//load in map
+FILE *fp;
+char filename[9];
+
+strcpy(filename, "lev1.map");
+fp = fopen(filename, "rb");
+
+
+for (y = 0; y < MAP_HEIGHT; y++)
+	{
+	for (x = 0; x < MAP_WIDTH; x++)
+		{
+		map[x][y][0] = getc(fp);
+		if (  map[x][y][0] == 3
+			|| map[x][y][0] == 8
+			|| map[x][y][0] == 9
+			|| map[x][y][0] == 17
+			|| map[x][y][0] == 25
+			|| map[x][y][0] == 29
+			|| map[x][y][0] == 30
+			|| map[x][y][0] == 31
+			|| map[x][y][0] == 32)
+			map[x][y][1] = HARD_TILE;
+		else map[x][y][1] = SOFT_TILE;
+		}
+	}
+//for (y = 0; y < MAP_HEIGHT; y++)
+//	for (x = 0; x < MAP_WIDTH; x++)
+//		map[x][y][1] = getc(fp);
+
+fclose(fp);
+//end
+
+play_wave("letsrock.wav", blaster);
+
+while (done == 0)
+{
+//translate sprites
+if (key_table[2] == 1)
+	{
+	if (map[curr_tile_x-1][curr_tile_y][1] == SOFT_TILE) for_legs.world_x -= 2;
+	//else if (for_legs.world_y + 25 > curr_tile_y*TILE_HEIGHT) for_legs.world_x -= 1;
+	if (facing == 0) for_legs.curr_frame = 8;
+	//for_torso.curr_frame = 4;
+	facing = 8;
+	}
+if (key_table[3] == 1)
+	{
+	if (map[curr_tile_x+1][curr_tile_y][1] == SOFT_TILE) for_legs.world_x += 2;
+	//	if (for_legs.world_y + 25 > curr_tile_y*TILE_HEIGHT) for_legs.world_x += 1;
+	if (facing == 8) for_legs.curr_frame = 0;
+	//for_torso.curr_frame = 0;
+	facing = 0;
+	}
+//for_head.curr_frame = facing;
+//if (key_table[0] == 1) for_head.curr_frame = facing + 2;
+//if (key_table[0] == 1 && key_table[3]) for_head.curr_frame = 1;
+//if (key_table[0] == 1 && key_table[2]) for_head.curr_frame = 5;
+//if (key_table[1] == 1) for_head.curr_frame = facing + 3;
+
+//update clocks
+for_legs.anim_clock++;
+if (for_legs.anim_clock == for_legs.anim_speed)
+	{
+	for_legs.anim_clock = 0;
+	if ((key_table[2] || key_table[3]) && (for_legs.curr_frame < 4 || (for_legs.curr_frame < 12 && for_legs.curr_frame > 7)))
+		{
+		if (++for_legs.curr_frame == facing + 4) for_legs.curr_frame = facing;
+		}
+	else (for_legs.curr_frame = facing);
+	}
+
+if (key_table[4] == 1 && ctrl_held == 0)
+	{
+	ctrl_held = 1;
+	Shoot_Pez();
+	}
+
+if (for_legs.world_y < curr_hard_tile_y*TILE_HEIGHT-60)
+	for_legs.y_acc = .7;
+else
+	{
+	//forest is on the ground
+	for_legs.y_vel = 0;
+	for_legs.y_acc = 0;
+	//for_legs.world_y = curr_tile_y*TILE_HEIGHT-17;
+	//for_legs.curr_frame = facing;
+	}
+
+if (key_table[5] == 1 && for_legs.y_acc == 0)
+	{
+	for_legs.y_acc = -12;
+	play_wave("yomama.wav", blaster);
+	}
+
+for_legs.y_vel += for_legs.y_acc;
+if (for_legs.y_vel > 7) for_legs.y_vel = 7;
+for_legs.world_y += for_legs.y_vel;
+
+if (for_legs.y_vel != 0) for_legs.curr_frame = facing + 5;
+
+//for_head.world_x = for_legs.world_x;
+//for_head.world_y = for_torso.world_y - 25;
+//for_torso.world_x = for_legs.world_x;
+//for_torso.world_y = for_legs.world_y - 10;
+
+//translate world positions to screen positions
+for_legs.x = for_legs.world_x - bg_seam_x*TILE_WIDTH+ox;
+//for_torso.x = for_torso.world_x - bg_seam_x*TILE_WIDTH+ox;
+//for_head.x = for_head.world_x - bg_seam_x*TILE_WIDTH+ox;
+for_legs.y = for_legs.world_y - bg_seam_y*TILE_HEIGHT+oy;
+//for_torso.y = for_torso.world_y - bg_seam_y*TILE_HEIGHT+oy;
+//for_head.y = for_head.world_y - bg_seam_y*TILE_HEIGHT+oy;
+
+if (for_legs.x > 210 && key_table[3] && bg_seam_x < MAP_WIDTH-TILE_COUNT_X+1) ox -= 2;
+if (for_legs.x < 110 && key_table[2] && bg_seam_x > 0) ox += 2;
+if (for_legs.y > 100 && bg_seam_y < MAP_HEIGHT-TILE_COUNT_Y+1) oy -= 2;
+if (for_legs.y < 50 && bg_seam_y > 0) oy += 2;
+
+for (i = 0; i < MAX_PEZ; i++)
+	{
+	if (pez[i].state == ALIVE)
+		{
+		pez[i].world_x += pez[i].x_vel;
+		pez[i].world_y += pez[i].y_vel;
+		pez[i].x = pez[i].world_x - bg_seam_x*TILE_WIDTH+ox;
+		pez[i].y = pez[i].world_y - bg_seam_y*TILE_HEIGHT+oy;
+		if (pez[i].x > SCREEN_WIDTH || pez[i].x < 0 ||
+		pez[i].y > SCREEN_HEIGHT || pez[i].y < 0) pez[i].state = DEAD;
+		}
+	}
+
+curr_tile_x = (for_legs.world_x + 20)/TILE_WIDTH;
+curr_tile_y = (for_legs.world_y + 25)/TILE_HEIGHT;
+curr_hard_tile_y = curr_tile_y;
+
+//now make the curr_hard_tile a "hard" one
+while (map[curr_tile_x][curr_hard_tile_y][1] == SOFT_TILE)
+	curr_hard_tile_y++;
+
+//update map-offset variables
+if (ox > TILE_WIDTH-1)
+	{
+	ox -= TILE_WIDTH;
+	bg_seam_x--;
+	}
+if (ox < 0)
+	{
+	ox += TILE_WIDTH;
+	bg_seam_x++;
+	}
+if (oy > TILE_HEIGHT-1)
+	{
+	oy -= TILE_HEIGHT;
+	bg_seam_y--;
+	}
+if (oy < 0)
+	{
+	oy += TILE_HEIGHT;
+	bg_seam_y++;
+	}
+
+Cls();
+//update map
+for (y = 0; y < TILE_COUNT_Y; y++)
+	{
+	for (x = 0; x < TILE_COUNT_X; x++)
+		{
+		Blit_Tile(tiles[map[x+bg_seam_x][y+bg_seam_y][0]], double_buffer, x*TILE_WIDTH + ox, y*TILE_HEIGHT + oy);
+		//Blit_Num_Mult(x*TILE_WIDTH, y*TILE_HEIGHT,map[x][y][0],&font,0);
+		//if (x == curr_tile_x && y == curr_tile_y)
+		//	Blit_Num_Mult((x-bg_seam_x)*TILE_WIDTH+ox, (y-bg_seam_y)*TILE_HEIGHT+oy,map[x][y][0],&font,0);
+		}
+	}
+for (y = 0; y < MAP_HEIGHT; y++)
+	{
+	for (x = 0; x < MAP_WIDTH; x++)
+		{
+		Pix(x,y,map[x][y][0]);
+		}
+	}
+
+//show graphics
+//Blit_Num_Mult(0,0,bg_seam_x,&font,0);
+//Blit_Num_Mult(0,11,bg_seam_y,&font,0);
+Place(&for_legs, &for_legs);
+//Place(&for_torso, &for_torso);
+//Place(&for_head, &for_head);
+for (i = 0; i < MAX_PEZ; i++)
+	if (pez[i].state == ALIVE) Pix(pez[i].x, pez[i].y, 121);
+
+Wait_For_Vsync();
+Show_DB();
+}
+//cleanup
+Delete_Sp(&for_legs);
+//Delete_Sp(&for_head);
+//Delete_Sp(&for_torso);
+for (i = 0; i < MAX_PEZ; i++)
+	Delete_Sp(&pez[i]);
+for (i = 0; i < MAX_TILES; i++)
+	farfree(tiles[i]);
+Bin_Delete(&font);
+Free_DB();
+
+Set_Video_Mode(TEXT_MODE);
+RestoreKeyboard();
+blaster.reset();
+}//end main
